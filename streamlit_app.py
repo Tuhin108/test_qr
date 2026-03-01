@@ -24,9 +24,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-# switched to stateless tokens; no file storage needed
+DATA_FILE = "redirects.json"
 MAX_EXPIRY_DAYS = 7
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-secret")  # set in Streamlit secrets
 
 # Get the base URL from environment or Streamlit's built-in
 # For Streamlit Cloud, this will automatically be the deployed URL
@@ -45,28 +44,22 @@ def handle_redirect():
         target_url = query_params["r"]
         token = query_params.get("t", None)
         
-        # If token provided, validate signature/expiry
+        # If token provided, track the scan and check expiry
         if token:
-            redirect_data = verify_token(token)
+            redirect_data = get_redirect(token)
             if redirect_data:
+                increment_scan_count(token)
                 target_url = redirect_data["url"]
             else:
                 # Token expired or invalid - show error page
                 show_expired_page()
                 return
         
-        # Perform redirect using JavaScript; attempt to break out of any enclosing iframe
+        # Perform redirect using JavaScript
         st.markdown(f"""
-            <noscript>
-                <meta http-equiv="refresh" content="0;url={target_url}">
-            </noscript>
+            <meta http-equiv="refresh" content="0;url={target_url}">
             <script>
-                try {{
-                    // navigate top-level window if inside iframe
-                    window.top.location.href = "{target_url}";
-                }} catch(e) {{
-                    window.location.href = "{target_url}";
-                }}
+                window.location.href = "{target_url}";
             </script>
             <div style="display:flex;justify-content:center;align-items:center;height:100vh;">
                 <p>Redirecting...</p>
@@ -115,45 +108,78 @@ def show_expired_page():
     st.stop()
 
 
-# =============================================================================
-# STATELESS TOKEN GENERATION / VERIFICATION
-# =============================================================================
-# JSON file storage is unreliable on Streamlit Cloud (different containers).
-# Instead tokens encode the target URL and expiry with an HMAC signature.
+# ============================================================================
+# JSON DATA MANAGEMENT
+# ============================================================================
 
-import hmac
-import hashlib
-
-def make_token(url: str, expiry_minutes: int) -> str:
-    """Return a base64-safe token containing url, expiry, and signature."""
-    expires_at = int((datetime.utcnow() + timedelta(minutes=expiry_minutes)).timestamp())
-    payload = f"{url}|{expires_at}"
-    sig = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    combined = f"{payload}|{sig}"
-    token = base64.urlsafe_b64encode(combined.encode()).decode()
-    # strip padding to be more scanner‑friendly (some apps drop '=')
-    return token.rstrip('=')
-
-
-def verify_token(token: str) -> Optional[dict]:
-    """Decode and verify token; return dict with url & expires_at or None."""
+def load_data() -> dict:
+    """Load redirect data from JSON file"""
+    if not Path(DATA_FILE).exists():
+        return {}
+    
     try:
-        # restore padding before decoding
-        padded = token + '=' * (-len(token) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode()).decode()
-        url, expires_str, sig = decoded.rsplit("|", 2)
-        expires_at = datetime.utcfromtimestamp(int(expires_str))
-        if datetime.utcnow() > expires_at:
-            return None
-        expected = hmac.new(SECRET_KEY.encode(), f"{url}|{expires_str}".encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            return None
-        return {"url": url, "expires_at": expires_at.isoformat()}
-    except Exception:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Failed to load data: {e}")
+        return {}
+
+
+def save_data(data: dict):
+    """Save redirect data to JSON file"""
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except IOError as e:
+        logger.error(f"Failed to save data: {e}")
+        raise
+
+
+def store_redirect(token: str, url: str, expiry_minutes: int) -> dict:
+    """Store a redirect mapping in JSON"""
+    created_at = datetime.utcnow()
+    expires_at = created_at + timedelta(minutes=expiry_minutes)
+    
+    data = load_data()
+    data[token] = {
+        "url": url,
+        "created_at": created_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "scan_count": 0
+    }
+    save_data(data)
+    
+    return {
+        "token": token,
+        "url": url,
+        "created_at": created_at.isoformat(),
+        "expires_at": expires_at.isoformat()
+    }
+
+
+def get_redirect(token: str) -> Optional[dict]:
+    """Retrieve redirect data and check expiry"""
+    data = load_data()
+    
+    if token not in data:
         return None
+    
+    redirect = data[token]
+    expires_at = datetime.fromisoformat(redirect["expires_at"])
+    
+    if datetime.utcnow() > expires_at:
+        return None
+    
+    return redirect
 
-# analytics and scan_count are no longer maintained in this stateless version
 
+def increment_scan_count(token: str):
+    """Increment the scan counter for a token"""
+    data = load_data()
+    
+    if token in data:
+        data[token]["scan_count"] = data[token].get("scan_count", 0) + 1
+        save_data(data)
 
 
 # ============================================================================
@@ -297,24 +323,25 @@ with col2:
         else:
             with st.spinner("Generating QR code..."):
                 try:
-                    # Build stateless token containing signed URL and expiry
-                    token = make_token(url, expiry_minutes)
-                    # Extract expiry info for the success message
-                    redirect_data = verify_token(token) or {}
+                    # Generate token
+                    token = str(uuid.uuid4())
+                    redirect_data = store_redirect(token, url, expiry_minutes)
                     
                     # Build redirect URL using Streamlit query params
                     # For local: http://localhost:8501/?r=https://target.com&t=token
                     # For deployed: https://your-app.streamlit.app/?r=https://target.com&t=token
+                    
+                    # Get the base URL - prefer environment variable, fallback to deployed URL
                     if BASE_URL:
-                        app_base = BASE_URL.rstrip('/')
+                        app_base = BASE_URL
                     else:
+                        # Fallback to the deployed Streamlit Cloud URL
                         app_base = "https://testqr-tuhin.streamlit.app"
                     
                     # URL-encode the target URL to handle special characters properly
                     import urllib.parse
                     encoded_url = urllib.parse.quote(url, safe='')
-                    encoded_token = urllib.parse.quote(token, safe='')
-                    redirect_url = f"{app_base}?r={encoded_url}&t={encoded_token}"
+                    redirect_url = f"{app_base}?r={encoded_url}&t={token}"
                     
                     # Process logo
                     logo_image = None
