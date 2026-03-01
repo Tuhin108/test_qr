@@ -1,8 +1,6 @@
 """
 QR Code Generator with Streamlit-based Redirect Service
-
-This version uses Streamlit query parameters for redirects, making it 
-compatible with Streamlit Cloud deployment.
+Includes Auto-Push Analytics to GitHub and in-app Dashboard.
 """
 
 import os
@@ -11,6 +9,8 @@ import uuid
 import base64
 import io
 import logging
+import requests
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, Any, cast
 from pathlib import Path
@@ -29,7 +29,6 @@ DATA_FILE = "s.json"
 MAX_EXPIRY_DAYS = 7
 
 # Get the base URL from environment or Streamlit's built-in
-# For Streamlit Cloud, this will automatically be the deployed URL
 BASE_URL = os.getenv("BASE_URL", "")
 
 
@@ -45,29 +44,21 @@ def handle_redirect():
         target_url = query_params["r"]
         token = query_params.get("t", None)
         
-        # If token provided, track the scan and check expiry
         if token:
             redirect_data = get_redirect(token)
             if redirect_data:
                 increment_scan_count(token)
                 target_url = redirect_data["url"]
             else:
-                # Token expired or invalid - show error page
                 show_expired_page()
                 return
         
-        # 1. Build a clean UI for the user
         st.title("🚀 Redirecting...")
         st.info(f"Taking you to: **{target_url}**")
         
-        # 2. Native link_button fallback. This creates a physical <a> tag with target="_blank"
-        # This is GUARANTEED to work for Instagram because it registers as a user click.
         st.write("If Your Target app doesn't open automatically, click below:")
         st.link_button("Open Link", target_url, type="primary", use_container_width=True)
         
-        # 3. The Automatic Attempt:
-        # window.top.location.href forces the main browser tab to navigate, 
-        # breaking out of Streamlit's iframe restrictions.
         components.html(
             f"""
             <script>
@@ -121,7 +112,7 @@ def show_expired_page():
 
 
 # ============================================================================
-# JSON DATA MANAGEMENT
+# JSON DATA MANAGEMENT (WITH GITHUB AUTO-PUSH)
 # ============================================================================
 
 def load_data() -> dict:
@@ -138,13 +129,43 @@ def load_data() -> dict:
 
 
 def save_data(data: dict):
-    """Save redirect data to JSON file"""
+    """Save redirect data locally AND push to GitHub automatically"""
+    # 1. Save locally first (keeps the app fast)
     try:
         with open(DATA_FILE, 'w') as f:
             json.dump(data, f, indent=2)
     except IOError as e:
-        logger.error(f"Failed to save data: {e}")
-        raise
+        logger.error(f"Failed to save data locally: {e}")
+
+    # 2. The Auto-Push Pipeline to GitHub
+    try:
+        # Pulling your GitHub token from Streamlit's secure secrets
+        if "GITHUB_TOKEN" in st.secrets:
+            github_token = st.secrets["GITHUB_TOKEN"] 
+            
+            repo = "Tuhin108/qr-forge" # Your exact GitHub repo
+            path = "analytics.json"
+            url = f"https://api.github.com/repos/{repo}/contents/{path}"
+            headers = {"Authorization": f"token {github_token}"}
+            
+            # Check if analytics.json already exists to get its 'sha' (required by GitHub to update files)
+            get_resp = requests.get(url, headers=headers)
+            sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+            
+            # Encode the data and push the commit
+            encoded_content = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+            payload = {
+                "message": "📊 Auto-updating QR scan analytics",
+                "content": encoded_content
+            }
+            if sha:
+                payload["sha"] = sha
+                
+            # Send it to GitHub
+            requests.put(url, headers=headers, json=payload)
+            
+    except Exception as e:
+        logger.error(f"Failed to push to GitHub: {e}")
 
 
 def store_redirect(token: str, url: str, expiry_minutes: int) -> dict:
@@ -335,27 +356,18 @@ with col2:
         else:
             with st.spinner("Generating QR code..."):
                 try:
-                    # Generate token
                     token = str(uuid.uuid4())
                     redirect_data = store_redirect(token, url, expiry_minutes)
                     
-                    # Build redirect URL using Streamlit query params
-                    # For local: http://localhost:8501/?r=https://target.com&t=token
-                    # For deployed: https://your-app.streamlit.app/?r=https://target.com&t=token
-                    
-                    # Get the base URL - prefer environment variable, fallback to deployed URL
                     if BASE_URL:
                         app_base = BASE_URL
                     else:
-                        # Fallback to the deployed Streamlit Cloud URL
                         app_base = "https://qr-forge.streamlit.app"
                     
-                    # URL-encode the target URL to handle special characters properly
                     import urllib.parse
                     encoded_url = urllib.parse.quote(url, safe='')
                     redirect_url = f"{app_base}?r={encoded_url}&t={token}"
                     
-                    # Process logo
                     logo_image = None
                     if logo_file is not None:
                         try:
@@ -364,15 +376,12 @@ with col2:
                             st.error(f"❌ Invalid logo image: {str(e)}")
                             logo_image = None
 
-                    # Generate QR code with redirect URL
                     png_bytes, svg_bytes = generate_qr_code(
                         redirect_url, fg_color, bg_color, error_level, logo_image, scale
                     )
                     
-                    # Display QR code
                     st.image(png_bytes, use_container_width=True)
                     
-                    # Success message
                     expires_at = datetime.fromisoformat(redirect_data["expires_at"])
                     st.success("✅ QR Code Generated Successfully!")
                     
@@ -383,7 +392,6 @@ with col2:
                     **Target URL:** {url}
                     """)
                     
-                    # Download buttons
                     col_d1, col_d2 = st.columns(2)
                     with col_d1:
                         st.download_button(
@@ -405,6 +413,30 @@ with col2:
                 except Exception as e:
                     st.error(f"❌ Error generating QR code: {str(e)}")
 
+# ============================================================================
+# ANALYTICS DASHBOARD
+# ============================================================================
+st.divider()
+st.subheader("📈 Scan Analytics Dashboard")
+
+analytics_data = load_data()
+
+if analytics_data:
+    display_data = []
+    for token, info in analytics_data.items():
+        display_data.append({
+            "Target URL": info.get("url", "Unknown"),
+            "Total Scans": info.get("scan_count", 0),
+            "Expires At": info.get("expires_at", "").replace("T", " ")[:19]
+        })
+        
+    df = pd.DataFrame(display_data)
+    df = df.sort_values(by="Total Scans", ascending=False)
+    
+    st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.info("No QR codes have been generated yet. Create one above to start tracking!")
+
 # Footer
 st.divider()
 
@@ -414,8 +446,8 @@ with st.expander("📊 Features & Deployment Guide"):
     - Custom colors and error correction levels
     - Optional logo overlay (maintains scannability)
     - Expiry-based redirects with token management
-    - JSON file persistence
-    - Scan tracking
+    - JSON file persistence and GitHub Analytics Push
+    - Scan tracking dashboard
     
     ### Deployment to Streamlit Cloud
     
@@ -423,15 +455,12 @@ with st.expander("📊 Features & Deployment Guide"):
        - Go to your app settings → Secrets
        - Add: `BASE_URL = "https://qr-forge.streamlit.app"`
     
-    2. How redirects work:
+    2. Add your GitHub Token:
+       - Go to your app settings → Secrets
+       - Add: `GITHUB_TOKEN = "ghp_your_token_here"`
+    
+    3. How redirects work:
        - QR code contains: `https://qr-forge.streamlit.app?r=https://target.com&t=token`
        - When scanned, app checks token expiry
        - If valid, redirects to target URL via JavaScript
-    
-    3. Note: Users may see a brief flash of the Streamlit page before redirect.
-       For instant redirects, use direct URL encoding instead.
     """)
-
-
-
-
