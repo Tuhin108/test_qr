@@ -38,7 +38,7 @@ BASE_URL = os.getenv("BASE_URL", "")
 # ============================================================================
 
 def handle_redirect():
-    """Check for redirect parameter and perform redirect using JavaScript"""
+    """Check for redirect parameter and perform redirect"""
     query_params = st.query_params
     
     if "r" in query_params:
@@ -52,29 +52,23 @@ def handle_redirect():
                 increment_scan_count(token)
                 target_url = redirect_data["url"]
             else:
-                # Token expired or invalid - show error page
                 show_expired_page()
                 return
         
-        # 1. Show a clean redirecting message with a manual fallback link
-        st.markdown(f"""
-            <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:80vh; font-family: sans-serif;">
-                <h2>Redirecting...</h2>
-                <p>If you are not redirected automatically, <a href="{target_url}">click here</a>.</p>
-            </div>
-        """, unsafe_allow_html=True)
+        # 1. Try the cleanest HTML meta refresh (works for local/VPS hosting)
+        # We isolated this from the other HTML to ensure React parses it correctly
+        st.markdown(f'<meta http-equiv="refresh" content="0; url={target_url}">', unsafe_allow_html=True)
         
-        # 2. Perform the actual redirect using components.html
-        # We use window.parent.location.href because components run in an iframe
-        components.html(
-            f"""
-            <script>
-                window.parent.location.href = "{target_url}";
-            </script>
-            """,
-            height=0,
-            width=0
-        )
+        # 2. Build a clean, professional fallback UI for Streamlit Cloud users
+        st.title("🚀 Redirecting...")
+        st.info(f"Destination: **{target_url}**")
+        
+        st.write("If you are not redirected automatically within 3 seconds, please click the button below. *(Some browsers block automatic redirects for your security).*")
+        
+        # 3. Native link_button is guaranteed to work because it registers as a physical user click
+        st.link_button("Continue to Destination", target_url, type="primary", use_container_width=True)
+        
+        # Stop the rest of the app from rendering
         st.stop()
 
 
@@ -429,4 +423,5 @@ with st.expander("📊 Features & Deployment Guide"):
     3. Note: Users may see a brief flash of the Streamlit page before redirect.
        For instant redirects, use direct URL encoding instead.
     """)
+
 
