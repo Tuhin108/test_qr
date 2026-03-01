@@ -57,9 +57,8 @@ def handle_redirect():
         
         # Perform redirect using JavaScript
         st.markdown(f"""
-            <meta http-equiv="refresh" content="0;url={target_url}">
             <script>
-                window.location.href = "{target_url}";
+                window.top.location.href = "{target_url}";
             </script>
             <div style="display:flex;justify-content:center;align-items:center;height:100vh;">
                 <p>Redirecting...</p>
