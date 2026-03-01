@@ -412,30 +412,7 @@ with col2:
                     
                 except Exception as e:
                     st.error(f"❌ Error generating QR code: {str(e)}")
-
-# ============================================================================
-# ANALYTICS DASHBOARD
-# ============================================================================
-st.divider()
-st.subheader("📈 Scan Analytics Dashboard")
-
-analytics_data = load_data()
-
-if analytics_data:
-    display_data = []
-    for token, info in analytics_data.items():
-        display_data.append({
-            "Target URL": info.get("url", "Unknown"),
-            "Total Scans": info.get("scan_count", 0),
-            "Expires At": info.get("expires_at", "").replace("T", " ")[:19]
-        })
-        
-    df = pd.DataFrame(display_data)
-    df = df.sort_values(by="Total Scans", ascending=False)
-    
-    st.dataframe(df, use_container_width=True, hide_index=True)
-else:
-    st.info("No QR codes have been generated yet. Create one above to start tracking!")
+                    
 
 # Footer
 st.divider()
@@ -464,3 +441,4 @@ with st.expander("📊 Features & Deployment Guide"):
        - When scanned, app checks token expiry
        - If valid, redirects to target URL via JavaScript
     """)
+
