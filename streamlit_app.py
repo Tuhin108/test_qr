@@ -62,7 +62,7 @@ def handle_redirect():
         
         # 2. Native link_button fallback. This creates a physical <a> tag with target="_blank"
         # This is GUARANTEED to work for Instagram because it registers as a user click.
-        st.write("If Instagram or your target app doesn't open automatically, click below:")
+        st.write("If Your Target app doesn't open automatically, click below:")
         st.link_button("Open Link", target_url, type="primary", use_container_width=True)
         
         # 3. The Automatic Attempt:
@@ -431,6 +431,7 @@ with st.expander("📊 Features & Deployment Guide"):
     3. Note: Users may see a brief flash of the Streamlit page before redirect.
        For instant redirects, use direct URL encoding instead.
     """)
+
 
 
 
