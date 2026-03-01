@@ -38,7 +38,7 @@ BASE_URL = os.getenv("BASE_URL", "")
 # ============================================================================
 
 def handle_redirect():
-    """Check for redirect parameter and perform redirect"""
+    """Check for redirect parameter and perform redirect using JavaScript"""
     query_params = st.query_params
     
     if "r" in query_params:
@@ -52,25 +52,33 @@ def handle_redirect():
                 increment_scan_count(token)
                 target_url = redirect_data["url"]
             else:
+                # Token expired or invalid - show error page
                 show_expired_page()
                 return
         
-        # 1. Try the cleanest HTML meta refresh (works for local/VPS hosting)
-        # We isolated this from the other HTML to ensure React parses it correctly
-        st.markdown(f'<meta http-equiv="refresh" content="0; url={target_url}">', unsafe_allow_html=True)
-        
-        # 2. Build a clean, professional fallback UI for Streamlit Cloud users
+        # 1. Build a clean UI for the user
         st.title("🚀 Redirecting...")
-        st.info(f"Destination: **{target_url}**")
+        st.info(f"Taking you to: **{target_url}**")
         
-        st.write("If you are not redirected automatically within 3 seconds, please click the button below. *(Some browsers block automatic redirects for your security).*")
+        # 2. Native link_button fallback. This creates a physical <a> tag with target="_blank"
+        # This is GUARANTEED to work for Instagram because it registers as a user click.
+        st.write("If Instagram or your target app doesn't open automatically, click below:")
+        st.link_button("Open Link", target_url, type="primary", use_container_width=True)
         
-        # 3. Native link_button is guaranteed to work because it registers as a physical user click
-        st.link_button("Continue to Destination", target_url, type="primary", use_container_width=True)
+        # 3. The Automatic Attempt:
+        # window.top.location.href forces the main browser tab to navigate, 
+        # breaking out of Streamlit's iframe restrictions.
+        components.html(
+            f"""
+            <script>
+                window.top.location.href = "{target_url}";
+            </script>
+            """,
+            height=0,
+            width=0
+        )
         
-        # Stop the rest of the app from rendering
         st.stop()
-
 
 def show_expired_page():
     """Show expired/invalid QR code page"""
@@ -423,5 +431,6 @@ with st.expander("📊 Features & Deployment Guide"):
     3. Note: Users may see a brief flash of the Streamlit page before redirect.
        For instant redirects, use direct URL encoding instead.
     """)
+
 
 
