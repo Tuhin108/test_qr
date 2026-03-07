@@ -72,7 +72,7 @@ For seamless development, this repository includes a configured `.devcontainer/d
 
 ---
 ```
-*Built by Tuhin Kumar Singha Roy*
+Built by (Tuhin Kumar Singha Roy)[https://github.com/Tuhin108]
 
 ```
 
