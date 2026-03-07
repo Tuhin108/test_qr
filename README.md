@@ -71,4 +71,4 @@ For seamless development, this repository includes a configured `.devcontainer/d
 * Expose and forward port `8501` to preview the Streamlit app.
 
 ---
-Built by (Tuhin Kumar Singha Roy)[https://github.com/Tuhin108]
+Built by [Tuhin Kumar Singha Roy](https://github.com/Tuhin108)
