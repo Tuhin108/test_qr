@@ -235,8 +235,7 @@ def generate_artistic_qr(
     qr_data: str,
     art_image: Image.Image,
     error_level: str = "H",
-    module_style: str = "Square",
-    bg_style: str = "White",
+
     saturation: float = 1.3,
     module_size: int = 16,
 ) -> bytes:
@@ -304,13 +303,7 @@ def generate_artistic_qr(
                 pr, pg, pb = int(pr * factor), int(pg * factor), int(pb * factor)
                 color = (pr, pg, pb)
 
-                if module_style == "Circle":
-                    draw.ellipse([x0, y0, x1, y1], fill=color)
-                elif module_style == "Rounded":
-                    radius = module_size // 3
-                    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=color)
-                else:  # Square
-                    draw.rectangle([x0, y0, x1, y1], fill=color)
+                draw.rectangle([x0, y0, x1, y1], fill=color)
 
             else:
                 # ── Light module: background treatment ──
@@ -450,12 +443,7 @@ with tab_art:
             key="art_error"
         )
 
-        art_module_style = st.selectbox(
-            "Module Shape",
-            ["Square", "Circle", "Rounded"],
-            index=0,
-            help="Shape of each QR module tile"
-        )
+
 
         art_bg = st.selectbox(
             "Background Style",
@@ -505,7 +493,7 @@ with tab_art:
                             qr_data=redirect_url,
                             art_image=art_image,
                             error_level=art_error,
-                            module_style=art_module_style,
+
                             bg_style=art_bg,
                             saturation=art_saturation,
                             module_size=art_module_px,
