@@ -342,7 +342,7 @@ handle_redirect()
 st.title("🎯 QR Forge")
 st.markdown("Generate custom QR codes with expiry-based redirects")
 
-tab_gen, tab_art = st.tabs(["✏️ Generate QR", "🖼️ Image → QR"])
+tab_gen, tab_art = st.tabs(["✏️ Generate QR", "🖼️ Artistic Mode"])
 
 
 # ============================================================================
