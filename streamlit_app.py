@@ -1,6 +1,7 @@
 """
-QR Code Generator with Streamlit-based Redirect Service
+QR Forge — QR Code Generator with Redirect Service, Artistic Mode, and Permanent QR.
 Includes Auto-Push Analytics to GitHub and in-app Dashboard.
+Optimised for Google search ranking via injected meta / structured-data tags.
 """
 
 import os
@@ -13,7 +14,8 @@ import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional, Any, cast
+from typing import Optional, Any, cast, Tuple, Literal
+
 from pathlib import Path
 
 import segno
@@ -21,23 +23,139 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
 import streamlit as st
 import streamlit.components.v1 as components
 
-# Configure logging
+# ── Color constants ──────────────────────────────────────────────────────────
+WHITE_RGB_INT = 0xFFFFFF
+WHITE_RGBA_INT = 0xFFFFFFFF
+WHITE_TRANS_INT = 0x00FFFFFF
+BLACK_RGB_INT = 0x000000
+
+# ── logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
+# ── runtime config ────────────────────────────────────────────────────────────
 DATA_FILE = "s.json"
 MAX_EXPIRY_DAYS = 7
-
 BASE_URL = os.getenv("BASE_URL", "")
+APP_URL = BASE_URL if BASE_URL else "https://qr-forge.streamlit.app"
 
 
 # ============================================================================
-# REDIRECT HANDLING (Streamlit-based)
+# SEO — inject <meta> tags + JSON-LD structured data into <head>
+# ============================================================================
+
+def inject_seo():
+    """
+    Streamlit renders inside an iframe-like shell; the only reliable way to
+    write into <head> from Python is via a zero-height components.html block
+    whose JavaScript mutates the parent document's <head>.
+    This runs once on every page load and is transparent to the user.
+    """
+    seo_script = f"""
+    <script>
+    (function() {{
+        var head = window.parent.document.head;
+
+        function setMeta(name, content, prop) {{
+            var sel = prop
+                ? 'meta[property="' + name + '"]'
+                : 'meta[name="'     + name + '"]';
+            var el  = head.querySelector(sel);
+            if (!el) {{
+                el = window.parent.document.createElement('meta');
+                if (prop) el.setAttribute('property', name);
+                else       el.setAttribute('name', name);
+                head.appendChild(el);
+            }}
+            el.setAttribute('content', content);
+        }}
+
+        // ── Primary meta ─────────────────────────────────────────────────────
+        setMeta('description',
+            'QR Forge — free online QR code generator. Create custom QR codes ' +
+            'with logo, colors, expiry-redirect, artistic image-style, and permanent ' +
+            'QR codes. No sign-up required. Download PNG & SVG instantly.');
+        setMeta('keywords',
+            'QR code generator, free QR code, custom QR code, QR code with logo, ' +
+            'QR code maker, artistic QR code, permanent QR code, dynamic QR code, ' +
+            'QR code online, QR code download, QR code redirect');
+        setMeta('robots', 'index, follow');
+        setMeta('author', 'Tuhin Kumar Singha Roy');
+
+        // ── Open Graph ───────────────────────────────────────────────────────
+        setMeta('og:type',        'website',                    true);
+        setMeta('og:title',       'QR Forge — Free Custom QR Code Generator', true);
+        setMeta('og:description',
+            'Generate custom, artistic, or permanent QR codes in seconds. ' +
+            'Add your logo, pick colors, set expiry. Free, no sign-up.',   true);
+        setMeta('og:url',         '{APP_URL}',                  true);
+        setMeta('og:image',       '{APP_URL}/favicon.ico',      true);
+        setMeta('og:site_name',   'QR Forge',                   true);
+
+        // ── Twitter Card ─────────────────────────────────────────────────────
+        setMeta('twitter:card',        'summary_large_image');
+        setMeta('twitter:title',       'QR Forge — Free Custom QR Code Generator');
+        setMeta('twitter:description',
+            'Custom • Artistic • Permanent QR codes. Logo support, color picker, ' +
+            'expiry redirects. Free & instant.');
+        setMeta('twitter:image',  '{APP_URL}/favicon.ico');
+
+        // ── Canonical link ───────────────────────────────────────────────────
+        if (!head.querySelector('link[rel="canonical"]')) {{
+            var link = window.parent.document.createElement('link');
+            link.rel  = 'canonical';
+            link.href = '{APP_URL}';
+            head.appendChild(link);
+        }}
+
+        // ── JSON-LD structured data (WebApplication schema) ──────────────────
+        if (!head.querySelector('#qrforge-jsonld')) {{
+            var script = window.parent.document.createElement('script');
+            script.id   = 'qrforge-jsonld';
+            script.type = 'application/ld+json';
+            script.text = JSON.stringify({{
+                "@context": "https://schema.org",
+                "@type": "WebApplication",
+                "name": "QR Forge",
+                "url": "{APP_URL}",
+                "description":
+                    "Free online QR code generator. Create custom, artistic, " +
+                    "and permanent QR codes with logo, colors, and expiry redirect. " +
+                    "Download PNG and SVG instantly — no sign-up required.",
+                "applicationCategory": "UtilitiesApplication",
+                "operatingSystem": "All",
+                "offers": {{
+                    "@type": "Offer",
+                    "price": "0",
+                    "priceCurrency": "USD"
+                }},
+                "author": {{
+                    "@type": "Person",
+                    "name": "Tuhin Kumar Singha Roy",
+                    "url": "https://www.linkedin.com/in/tuhininaiml"
+                }},
+                "featureList": [
+                    "Custom QR code with logo",
+                    "Color customization",
+                    "Expiry-based redirect QR codes",
+                    "Artistic image-style QR codes",
+                    "Permanent QR codes",
+                    "PNG and SVG download"
+                ]
+            }});
+            head.appendChild(script);
+        }}
+    }})();
+</script>
+    """
+    components.html(seo_script, height=0, width=0)
+
+
+# ============================================================================
+# REDIRECT HANDLING
 # ============================================================================
 
 def handle_redirect():
-    """Check for redirect parameter and perform redirect using JavaScript"""
     query_params = st.query_params
 
     if "r" in query_params:
@@ -53,11 +171,10 @@ def handle_redirect():
                 show_expired_page()
                 return
 
-        st.title("🚀 Redirecting...")
+        st.title("🚀 Redirecting…")
         st.info(f"Taking you to: **{target_url}**")
-        st.write("If Your Target app doesn't open automatically, click below:")
+        st.write("If your target doesn't open automatically, click below:")
         st.link_button("Open Link", target_url, type="primary", use_container_width=True)
-
         components.html(
             f"""<script>window.top.location.href = "{target_url}";</script>""",
             height=0, width=0
@@ -66,27 +183,17 @@ def handle_redirect():
 
 
 def show_expired_page():
-    """Show expired/invalid QR code page"""
     st.markdown("""
-        <!DOCTYPE html><html><head><style>
-        body { font-family: Arial, sans-serif; display: flex; justify-content: center;
-               align-items: center; height: 100vh; margin: 0;
-               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-        .container { background: white; padding: 40px; border-radius: 10px;
-                     box-shadow: 0 10px 40px rgba(0,0,0,0.2); text-align: center; max-width: 400px; }
-        h1 { color: #e53e3e; margin-bottom: 20px; }
-        p { color: #4a5568; line-height: 1.6; }
-        </style></head><body><div class="container">
-        <h1>⚠️ Invalid or Expired</h1>
-        <p>This QR code has either expired or does not exist.</p>
-        <p>Please contact the QR code creator for a new link.</p>
-        </div></body></html>
+        <div style="font-family:Arial,sans-serif;text-align:center;padding:60px 20px;">
+        <h1 style="color:#e53e3e;">⚠️ Invalid or Expired</h1>
+        <p style="color:#4a5568;">This QR code has expired or does not exist.<br>
+        Please contact the creator for a new link.</p></div>
     """, unsafe_allow_html=True)
     st.stop()
 
 
 # ============================================================================
-# JSON DATA MANAGEMENT (WITH GITHUB AUTO-PUSH)
+# DATA MANAGEMENT
 # ============================================================================
 
 def load_data() -> dict:
@@ -116,13 +223,13 @@ def save_data(data: dict):
             headers = {"Authorization": f"token {github_token}"}
             get_resp = requests.get(url, headers=headers)
             sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
-            encoded_content = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
-            payload = {"message": "📊 Auto-updating QR scan analytics", "content": encoded_content}
+            encoded = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+            payload = {"message": "📊 Auto-updating QR scan analytics", "content": encoded}
             if sha:
                 payload["sha"] = sha
             requests.put(url, headers=headers, json=payload)
     except Exception as e:
-        logger.error(f"Failed to push to GitHub: {e}")
+        logger.error(f"GitHub push failed: {e}")
 
 
 def store_redirect(token: str, url: str, expiry_minutes: int) -> dict:
@@ -159,7 +266,7 @@ def increment_scan_count(token: str):
 
 
 # ============================================================================
-# STANDARD QR CODE GENERATION
+# QR CODE GENERATION — STANDARD
 # ============================================================================
 
 def validate_url(url: str) -> bool:
@@ -209,22 +316,18 @@ def add_logo_to_qr(qr_image: Image.Image, logo: Image.Image) -> Image.Image:
     if logo.mode != "RGBA":
         logo = logo.convert("RGBA")
     logo_pos = ((qr_width - logo.width) // 2, (qr_height - logo.height) // 2)
-    logo_bg = Image.new("RGBA", logo.size, cast(Any, (255, 255, 255, 255)))
+    logo_bg = Image.new("RGBA", logo.size, WHITE_RGBA_INT)
     logo_bg.paste(logo, (0, 0), logo)
     qr_image.paste(logo_bg, logo_pos, logo_bg)
     return qr_image
 
 
 # ============================================================================
-# ARTISTIC IMAGE → QR  (module-by-module pixel coloring)
+# QR CODE GENERATION — ARTISTIC
 # ============================================================================
 
 def _is_finder_or_separator(row: int, col: int, n: int) -> bool:
-    """
-    Returns True if (row, col) falls inside one of the three finder patterns
-    or their separator zones (8x8 area in each corner).
-    """
-    margin = 8  # 7-module finder + 1-module separator
+    margin = 8
     in_tl = row < margin and col < margin
     in_tr = row < margin and col >= (n - margin)
     in_bl = row >= (n - margin) and col < margin
@@ -239,237 +342,285 @@ def generate_artistic_qr(
     saturation: float = 1.3,
     module_size: int = 16,
 ) -> bytes:
-    """
-    True image-into-QR technique:
-    - Each QR module is drawn as a colored square/dot/rounded tile.
-    - The color of every dark module is sampled from the corresponding
-      pixel of the art image — making the QR pattern visually read as
-      the image when viewed from a distance.
-    - Light (background) modules are drawn white / transparent / or a
-      very light tint of the image — keeping the QR scannable.
-    - Finder patterns are always kept clean black-on-white.
-    """
+    def safe_radius(r: float) -> int:
+        """Convert float radius to int for type compatibility."""
+        return int(r)
+
     error_map = {"L": "l", "M": "m", "Q": "q", "H": "h"}
     error = error_map.get(error_level.upper(), "h")
-
     qr = segno.make(qr_data, error=error)
 
-    # --- Get the raw module matrix ---
-    # segno's matrix is a tuple of bytearrays; non-zero = dark module
     matrix = list(qr.matrix)
     n_rows = len(matrix)
     n_cols = len(matrix[0]) if n_rows else 0
 
-    # Canvas size in pixels
     canvas_w = n_cols * module_size
     canvas_h = n_rows * module_size
 
-    # --- Prepare art image: resize to exactly (n_cols, n_rows) so each
-    #     pixel maps 1-to-1 onto one QR module ---
     art = art_image.convert("RGB")
     art = ImageEnhance.Contrast(art).enhance(1.2)
     art = ImageEnhance.Color(art).enhance(saturation)
     art_small = art.resize((n_cols, n_rows), Image.Resampling.LANCZOS)
-    art_pixels = np.array(art_small, dtype=np.uint8)   # shape (n_rows, n_cols, 3)
+    art_pixels = np.array(art_small, dtype=np.uint8)
 
-    # --- Create output canvas ---
     if bg_style == "Transparent":
-        canvas = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 0))
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), WHITE_TRANS_INT)
     else:
-        canvas = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+        canvas = Image.new("RGB", (canvas_w, canvas_h), WHITE_RGB_INT)
 
     draw = ImageDraw.Draw(canvas)
+
+    WHITE_RGB = (255, 255, 255)
+    BLACK_RGB = (0, 0, 0)
 
     for r in range(n_rows):
         for c in range(n_cols):
             is_dark = matrix[r][c] != 0
-
             x0 = c * module_size
             y0 = r * module_size
             x1 = x0 + module_size - 1
             y1 = y0 + module_size - 1
 
             if _is_finder_or_separator(r, c, n_rows):
-                # ── Finder / separator: keep clean black or white ──
-                color = (0, 0, 0) if is_dark else (255, 255, 255)
+                color: Tuple[int, int, int] = BLACK_RGB if is_dark else WHITE_RGB
                 draw.rectangle([x0, y0, x1, y1], fill=color)
-
             elif is_dark:
-                # ── Dark data module: color from art image ──
                 pr, pg, pb = int(art_pixels[r, c, 0]), int(art_pixels[r, c, 1]), int(art_pixels[r, c, 2])
-
-                # Darken slightly so modules stay readable
-                factor = 0.75
-                pr, pg, pb = int(pr * factor), int(pg * factor), int(pb * factor)
-                color = (pr, pg, pb)
-
-                draw.rectangle([x0, y0, x1, y1], fill=color)
-
+                f = 0.75
+                draw.rectangle([x0, y0, x1, y1], fill=(int(pr*f), int(pg*f), int(pb*f)))
             else:
-                # ── Light module: background treatment ──
                 if bg_style == "Image tint":
                     pr, pg, pb = int(art_pixels[r, c, 0]), int(art_pixels[r, c, 1]), int(art_pixels[r, c, 2])
-                    # Very light wash — blend toward white
-                    pr = int(pr * 0.15 + 255 * 0.85)
-                    pg = int(pg * 0.15 + 255 * 0.85)
-                    pb = int(pb * 0.15 + 255 * 0.85)
-                    draw.rectangle([x0, y0, x1, y1], fill=(pr, pg, pb))
+                    draw.rectangle([x0, y0, x1, y1], fill=(
+                        int(pr * 0.15 + 255 * 0.85),
+                        int(pg * 0.15 + 255 * 0.85),
+                        int(pb * 0.15 + 255 * 0.85)
+                    ))
                 elif bg_style == "Transparent":
-                    # Leave transparent (already set on canvas)
                     pass
-                else:  # White
+                else:
                     draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255))
 
-    # Light sharpening for crisp module edges
     if bg_style != "Transparent":
-        canvas = canvas.filter(ImageFilter.UnsharpMask(radius=0.8, percent=100, threshold=2))
+        canvas = canvas.filter(ImageFilter.UnsharpMask(radius=safe_radius(0.8), percent=100, threshold=2))
 
     buf = io.BytesIO()
-    fmt = "PNG"
-    canvas.save(buf, format=fmt, optimize=True)
+    canvas.save(buf, format="PNG", optimize=True)
     buf.seek(0)
     return buf.getvalue()
 
 
 # ============================================================================
-# STREAMLIT UI
+# QR CODE GENERATION — PERMANENT (URL embedded directly, no redirect)
 # ============================================================================
 
-st.set_page_config(page_title="QR Forge", page_icon="🎯", layout="wide")
+def generate_permanent_qr(
+    url: str,
+    fg_color: str = "#000000",
+    bg_color: str = "#ffffff",
+    error_level: str = "M",
+    logo_image: Optional[Image.Image] = None,
+    scale: int = 10,
+) -> tuple[bytes, bytes]:
+    """
+    Encodes the URL directly into the QR — no token, no server, never expires.
+    Returns (png_bytes, svg_bytes).
+    """
+    return generate_qr_code(
+        data=url,
+        fg_color=fg_color,
+        bg_color=bg_color,
+        error_level=error_level,
+        logo_image=logo_image,
+        background_image=None,
+        scale=scale,
+    )
 
+
+# ============================================================================
+# STREAMLIT PAGE CONFIG  (must come before any other st.* call)
+# ============================================================================
+
+st.set_page_config(
+    page_title="QR Forge — Free Custom QR Code Generator",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ── Inject SEO (runs after set_page_config) ───────────────────────────────────
+inject_seo()
+
+# ── Handle redirect before rendering UI ──────────────────────────────────────
 handle_redirect()
 
-st.title("🎯 QR Forge")
-st.markdown("Generate custom QR codes with expiry-based redirects")
 
-tab_gen, tab_art = st.tabs(["✏️ Generate QR", "🖼️ Artistic Mode"])
+# ============================================================================
+# GLOBAL STYLES — minimal polish on top of Streamlit's default theme
+# ============================================================================
+
+st.markdown("""
+<style>
+/* ── Kill Streamlit's default top padding ── */
+section.main > div:first-child { padding-top: 0.6rem !important; }
+div[data-testid="stAppViewBlockContainer"] { padding-top: 0.5rem !important; }
+header[data-testid="stHeader"] { display: none !important; }
+
+/* ── Tab highlight ── */
+div[data-baseweb="tab-list"] button[aria-selected="true"] {
+    border-bottom: 3px solid #667eea;
+    color: #667eea;
+}
+/* ── Download-button accent ── */
+div[data-testid="stDownloadButton"] button {
+    background: linear-gradient(135deg,#667eea,#764ba2);
+    color: #fff;
+    border: none;
+}
+/* ── Hero headline — big & gradient ── */
+.qf-hero {
+    font-size: 3.6rem;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+    line-height: 1.05;
+    margin-bottom: 6px;
+    background: linear-gradient(135deg,#667eea 0%,#f093fb 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.qf-sub  { color: #718096; font-size: 1rem; margin-top: 0; margin-bottom: 18px; }
+/* ── Info cards ── */
+.qf-card { background:#f7fafc; border-left:4px solid #667eea;
+           padding:12px 16px; border-radius:6px; margin-bottom:8px; font-size:.9rem; }
+/* ── Artistic QR preview: cap height so it never overflows ── */
+.art-qr-preview img {
+    max-height: 420px !important;
+    width: auto !important;
+    display: block;
+    margin: 0 auto;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================================================
-# TAB 1 — Standard QR Generator
+# HERO HEADER
 # ============================================================================
+
+st.markdown('<p class="qf-hero">🎯 QR Forge</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="qf-sub">Free custom QR codes — dynamic redirects · artistic image-style · '
+    'permanent embed · logo support · PNG & SVG download</p>',
+    unsafe_allow_html=True
+)
+
+
+# ============================================================================
+# TABS
+# ============================================================================
+
+tab_gen, tab_art, tab_perm = st.tabs([
+    "✏️ Dynamic QR (with redirect)",
+    "🖼️ Artistic QR",
+    "🔒 Permanent QR",
+])
+
+
+# ── TAB 1 — Dynamic QR ───────────────────────────────────────────────────────
 with tab_gen:
     col1, col2 = st.columns([1, 1])
 
     with col1:
         st.subheader("Configuration")
-        url = st.text_input("Target URL", placeholder="https://example.com",
-                            help="The URL where the QR code will redirect", key="gen_url")
+        st.caption(
+            "The QR points to a **trackable short-link** that redirects to your URL. "
+            "Scans are counted, and the link expires after the time you choose."
+        )
+        url = st.text_input("Target URL", placeholder="https://example.com", key="gen_url")
 
         col_a, col_b = st.columns(2)
         with col_a:
-            fg_color = st.color_picker("Foreground Color", "#000000")
+            fg_color = st.color_picker("Foreground", "#000000")
         with col_b:
-            bg_color = st.color_picker("Background Color", "#ffffff")
+            bg_color = st.color_picker("Background", "#ffffff")
 
-        error_level = st.selectbox("Error Correction Level", ["L", "M", "Q", "H"], index=1,
-                                   help="L=7%, M=15%, Q=25%, H=30% error correction")
-        expiry_minutes = st.slider("Expiry Time (minutes)", min_value=1,
-                                   max_value=MAX_EXPIRY_DAYS * 24 * 60, value=60)
-        scale = st.slider("QR Code Scale (size)", min_value=5, max_value=20, value=10)
-        bg_file = st.file_uploader("Background Picture (Optional)", type=["png", "jpg", "jpeg"])
-        logo_file = st.file_uploader("Logo (Optional)", type=["png", "jpg", "jpeg"])
-        generate_btn = st.button("🎨 Generate QR Code", type="primary", use_container_width=True)
+        error_level = st.selectbox("Error Correction", ["L", "M", "Q", "H"], index=1,
+                                   help="L=7% · M=15% · Q=25% · H=30%")
+        expiry_minutes = st.slider("Expiry (minutes)", 1, MAX_EXPIRY_DAYS * 24 * 60, 60)
+        scale = st.slider("Scale (size)", 5, 20, 10)
+        bg_file   = st.file_uploader("Background image (optional)", type=["png","jpg","jpeg"])
+        logo_file = st.file_uploader("Logo (optional)",             type=["png","jpg","jpeg"])
+        generate_btn = st.button("🎨 Generate Dynamic QR", type="primary", use_container_width=True)
 
     with col2:
-        st.subheader("Generated QR Code")
+        st.subheader("Preview")
         if generate_btn:
             if not url:
                 st.error("❌ Please enter a target URL")
             elif not validate_url(url):
                 st.error("❌ URL must start with http:// or https://")
             else:
-                with st.spinner("Generating QR code..."):
+                with st.spinner("Generating…"):
                     try:
+                        import urllib.parse
                         token = str(uuid.uuid4())
                         redirect_data = store_redirect(token, url, expiry_minutes)
-                        app_base = BASE_URL if BASE_URL else "https://qr-forge.streamlit.app"
-                        import urllib.parse
-                        encoded_url = urllib.parse.quote(url, safe='')
-                        redirect_url = f"{app_base}?r={encoded_url}&t={token}"
+                        encoded_url   = urllib.parse.quote(url, safe='')
+                        redirect_url  = f"{APP_URL}?r={encoded_url}&t={token}"
 
-                        background_image = Image.open(bg_file) if bg_file else None
-                        logo_image = Image.open(logo_file) if logo_file else None
+                        bg_img   = Image.open(bg_file)   if bg_file   else None
+                        logo_img = Image.open(logo_file) if logo_file else None
 
                         png_bytes, svg_bytes = generate_qr_code(
-                            redirect_url, fg_color, bg_color, error_level,
-                            logo_image, background_image, scale
+                            redirect_url, fg_color, bg_color,
+                            error_level, logo_img, bg_img, scale
                         )
                         st.image(png_bytes, use_container_width=True)
                         expires_at = datetime.fromisoformat(redirect_data["expires_at"])
-                        st.success("✅ QR Code Generated Successfully!")
-                        st.markdown(f"""
-                        **Redirect URL:** `{redirect_url}`
-                        **Token:** `{token}`
-                        **Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')} UTC
-                        **Target URL:** {url}
-                        """)
-                        col_d1, col_d2 = st.columns(2)
-                        with col_d1:
-                            st.download_button("📥 Download PNG", data=png_bytes,
-                                               file_name=f"qr_{token}.png", mime="image/png",
-                                               use_container_width=True)
-                        with col_d2:
-                            st.download_button("📥 Download SVG", data=svg_bytes,
-                                               file_name=f"qr_{token}.svg", mime="image/svg+xml",
-                                               use_container_width=True)
+                        st.success("✅ QR Code Generated!")
+                        st.markdown(
+                            f'<div class="qf-card">🔗 <b>Redirect URL:</b> <code>{redirect_url}</code><br>'
+                            f'🪙 <b>Token:</b> <code>{token}</code><br>'
+                            f'⏰ <b>Expires:</b> {expires_at.strftime("%Y-%m-%d %H:%M")} UTC<br>'
+                            f'🎯 <b>Target:</b> {url}</div>',
+                            unsafe_allow_html=True
+                        )
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.download_button("📥 PNG", data=png_bytes,
+                                               file_name=f"qr_{token}.png",
+                                               mime="image/png", use_container_width=True)
+                        with c2:
+                            st.download_button("📥 SVG", data=svg_bytes,
+                                               file_name=f"qr_{token}.svg",
+                                               mime="image/svg+xml", use_container_width=True)
                     except Exception as e:
-                        st.error(f"❌ Error generating QR code: {str(e)}")
+                        st.error(f"❌ {e}")
 
 
-# ============================================================================
-# TAB 2 — Artistic Image → QR
-# ============================================================================
+# ── TAB 2 — Artistic QR ──────────────────────────────────────────────────────
 with tab_art:
     st.subheader("🖼️ Turn Your Image into a QR Code")
     st.markdown(
         "Upload any image — its colors are mapped **module by module** onto the QR pattern. "
-        "The result looks like your image made of QR pixels, and is fully scannable."
+        "Looks like your image, scans like a QR code."
     )
 
     art_col1, art_col2 = st.columns([1, 1])
 
     with art_col1:
-        art_url = st.text_input("Target URL", placeholder="https://example.com",
-                                help="The URL this QR code will redirect to", key="art_url")
-
-        art_image_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg", "webp"],
-                                          help="This image's colors will fill the QR modules",
-                                          key="art_image")
-
-        art_error = st.selectbox(
-            "Error Correction Level", ["M", "Q", "H"], index=2,
-            help="H = 30% damage tolerance — recommended for artistic QR codes",
-            key="art_error"
-        )
-
-
-
-        art_bg = st.selectbox(
-            "Background Style",
-            ["White", "Image tint", "Transparent"],
-            index=0,
-            help="White = clean scannable background | Image tint = subtle color wash | Transparent = PNG with alpha"
-        )
-
-        art_saturation = st.slider(
-            "Color Saturation", min_value=0.5, max_value=2.5, value=1.3, step=0.1,
-            help="Boost image colors so they show clearly in the modules"
-        )
-
-        art_module_px = st.slider(
-            "Module Size (px)", min_value=8, max_value=24, value=16, step=2,
-            help="Pixel size of each QR module — larger = higher resolution output"
-        )
-
-        art_expiry = st.slider("Expiry Time (minutes)", min_value=1,
-                               max_value=MAX_EXPIRY_DAYS * 24 * 60, value=60, key="art_expiry")
-
-        art_btn = st.button("🎨 Generate Artistic QR", type="primary", use_container_width=True)
+        art_url        = st.text_input("Target URL", placeholder="https://example.com", key="art_url")
+        art_image_file = st.file_uploader("Upload Image", type=["png","jpg","jpeg","webp"], key="art_img")
+        art_error      = st.selectbox("Error Correction", ["M","Q","H"], index=2, key="art_err")
+        art_bg         = st.selectbox("Background Style", ["White","Image tint","Transparent"])
+        art_saturation = st.slider("Color Saturation", 0.5, 2.5, 1.3, 0.1)
+        art_module_px  = st.slider("Module Size (px)", 8, 24, 16, 2)
+        art_expiry     = st.slider("Expiry (minutes)", 1, MAX_EXPIRY_DAYS * 24 * 60, 60, key="art_exp")
+        art_btn        = st.button("🎨 Generate Artistic QR", type="primary", use_container_width=True)
 
     with art_col2:
         st.subheader("Result")
-
         if art_btn:
             if not art_url:
                 st.error("❌ Please enter a target URL")
@@ -480,77 +631,224 @@ with tab_art:
             else:
                 with st.spinner("Mapping image colors onto QR modules…"):
                     try:
+                        import urllib.parse
                         token = str(uuid.uuid4())
                         redirect_data = store_redirect(token, art_url, art_expiry)
-                        app_base = BASE_URL if BASE_URL else "https://qr-forge.streamlit.app"
-                        import urllib.parse
-                        encoded_url = urllib.parse.quote(art_url, safe='')
-                        redirect_url = f"{app_base}?r={encoded_url}&t={token}"
+                        encoded_url   = urllib.parse.quote(art_url, safe='')
+                        redirect_url  = f"{APP_URL}?r={encoded_url}&t={token}"
 
                         art_image = Image.open(art_image_file)
-
                         png_bytes = generate_artistic_qr(
                             qr_data=redirect_url,
                             art_image=art_image,
                             error_level=art_error,
-
                             bg_style=art_bg,
                             saturation=art_saturation,
                             module_size=art_module_px,
                         )
-
-                        st.image(png_bytes, use_container_width=True)
-
+                        # Cap to 420 px — artistic QRs are high-res and overflow otherwise
+                        st.markdown('<div class="art-qr-preview">', unsafe_allow_html=True)
+                        st.image(png_bytes, width=420)
+                        st.markdown('</div>', unsafe_allow_html=True)
                         expires_at = datetime.fromisoformat(redirect_data["expires_at"])
                         st.success("✅ Artistic QR Generated!")
-                        st.markdown(f"""
-                        **Token:** `{token}`
-                        **Expires:** {expires_at.strftime('%Y-%m-%d %H:%M:%S')} UTC
-                        **Target URL:** {art_url}
-                        """)
-                        st.info(
-                            "💡 **Tip:** Test scanning before sharing. "
-                            "If it won't scan, switch to **Square** modules and **White** background."
+                        st.markdown(
+                            f'<div class="qf-card">🪙 <b>Token:</b> <code>{token}</code><br>'
+                            f'⏰ <b>Expires:</b> {expires_at.strftime("%Y-%m-%d %H:%M")} UTC<br>'
+                            f'🎯 <b>Target:</b> {art_url}</div>',
+                            unsafe_allow_html=True
                         )
-                        st.download_button(
-                            "📥 Download Artistic QR (PNG)", data=png_bytes,
-                            file_name=f"art_qr_{token}.png", mime="image/png",
-                            use_container_width=True
-                        )
+                        st.info("💡 Tip: test scanning before sharing. If it won't scan, use **White** background.")
+                        st.download_button("📥 Download Artistic QR (PNG)", data=png_bytes,
+                                           file_name=f"art_qr_{token}.png",
+                                           mime="image/png", use_container_width=True)
                     except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
+                        st.error(f"❌ {e}")
         else:
-            st.markdown(
-                """
-                <div style="border:2px dashed #cbd5e0; border-radius:12px; height:340px;
-                            display:flex; flex-direction:column; align-items:center;
-                            justify-content:center; color:#a0aec0; font-size:15px;
-                            text-align:center; padding:20px;">
-                    <div style="font-size:52px; margin-bottom:14px;">🖼️</div>
+            st.markdown("""
+                <div style="border:2px dashed #cbd5e0;border-radius:12px;height:340px;
+                            display:flex;flex-direction:column;align-items:center;
+                            justify-content:center;color:#a0aec0;font-size:15px;
+                            text-align:center;padding:20px;">
+                    <div style="font-size:52px;margin-bottom:14px;">🖼️</div>
                     <div>Upload an image + enter a URL<br>Your image becomes the QR pattern</div>
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+            """, unsafe_allow_html=True)
+
+
+# ── TAB 3 — Permanent QR ─────────────────────────────────────────────────────
+with tab_perm:
+    st.subheader("🔒 Permanent QR Code")
+
+    # Explain the difference clearly
+    st.markdown("""
+    <div style="background:#ebf8ff;border-left:4px solid #3182ce;padding:14px 18px;
+                border-radius:6px;margin-bottom:18px;font-size:.95rem;color:#2c5282;">
+    <b>What is a Permanent QR?</b><br>
+    The destination URL is <b>baked directly into the QR pattern</b> — there is no
+    redirect server, no token, and <b>no expiry</b>. The code will work forever, even
+    if this app goes offline. Trade-off: you cannot track scan counts or change the
+    destination later.
+    </div>
+    """, unsafe_allow_html=True)
+
+    perm_col1, perm_col2 = st.columns([1, 1])
+
+    with perm_col1:
+        st.subheader("Configuration")
+
+        perm_url = st.text_input(
+            "Destination URL",
+            placeholder="https://example.com",
+            key="perm_url",
+            help="This URL is embedded directly in the QR — no server involved."
+        )
+
+        col_pa, col_pb = st.columns(2)
+        with col_pa:
+            perm_fg = st.color_picker("Foreground", "#000000", key="perm_fg")
+        with col_pb:
+            perm_bg = st.color_picker("Background", "#ffffff", key="perm_bg")
+
+        perm_error = st.selectbox(
+            "Error Correction",
+            ["L", "M", "Q", "H"],
+            index=1,
+            key="perm_err",
+            help="Higher = more damage-resistant but denser QR. M is fine for most uses."
+        )
+        perm_scale = st.slider("Scale (size)", 5, 20, 10, key="perm_scale")
+        perm_logo  = st.file_uploader("Logo (optional)", type=["png","jpg","jpeg"], key="perm_logo")
+
+        # Comparison helper
+        with st.expander("Dynamic vs Permanent — which should I use?"):
+            st.markdown("""
+            | Feature | Dynamic QR | Permanent QR |
+            |---|---|---|
+            | Works forever | ❌ (expires) | ✅ |
+            | Scan analytics | ✅ | ❌ |
+            | Change destination | ✅ (re-generate) | ❌ |
+            | Needs internet to scan | ✅ | ❌ |
+            | Smaller QR pattern | ✅ | Depends on URL length |
+            """)
+
+        perm_btn = st.button("🔒 Generate Permanent QR", type="primary", use_container_width=True)
+
+    with perm_col2:
+        st.subheader("Preview")
+
+        if perm_btn:
+            if not perm_url:
+                st.error("❌ Please enter a destination URL")
+            elif not validate_url(perm_url):
+                st.error("❌ URL must start with http:// or https://")
+            else:
+                with st.spinner("Embedding URL directly into QR…"):
+                    try:
+                        logo_img = Image.open(perm_logo) if perm_logo else None
+
+                        png_bytes, svg_bytes = generate_permanent_qr(
+                            url=perm_url,
+                            fg_color=perm_fg,
+                            bg_color=perm_bg,
+                            error_level=perm_error,
+                            logo_image=logo_img,
+                            scale=perm_scale,
+                        )
+
+                        st.image(png_bytes, use_container_width=True)
+                        st.success("✅ Permanent QR Generated — never expires!")
+
+                        st.markdown(
+                            f'<div class="qf-card">'
+                            f'🎯 <b>Embedded URL:</b> <code>{perm_url}</code><br>'
+                            f'🔒 <b>Type:</b> Permanent (no redirect, no expiry)<br>'
+                            f'🗜️ <b>Error Correction:</b> {perm_error}'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                        # Verify by showing what a scanner would get
+                        st.info(
+                            "🔍 **Verify:** Scan this QR with your phone — it should open "
+                            f"`{perm_url}` directly, with no intermediate page."
+                        )
+
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.download_button(
+                                "📥 Download PNG",
+                                data=png_bytes,
+                                file_name="permanent_qr.png",
+                                mime="image/png",
+                                use_container_width=True
+                            )
+                        with c2:
+                            st.download_button(
+                                "📥 Download SVG",
+                                data=svg_bytes,
+                                file_name="permanent_qr.svg",
+                                mime="image/svg+xml",
+                                use_container_width=True
+                            )
+
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+        else:
+            st.markdown("""
+                <div style="border:2px dashed #bee3f8;border-radius:12px;height:340px;
+                            display:flex;flex-direction:column;align-items:center;
+                            justify-content:center;color:#90cdf4;font-size:15px;
+                            text-align:center;padding:20px;">
+                    <div style="font-size:52px;margin-bottom:14px;">🔒</div>
+                    <div>Enter a URL and click Generate<br>
+                    <span style="font-size:13px;">URL embedded permanently — no server, no expiry</span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+
+# ============================================================================
+# SEO CONTENT BLOCK — visible keyword-rich text for crawlers
+# ============================================================================
+
+st.divider()
+with st.expander("ℹ️ About QR Forge — Free Online QR Code Generator", expanded=False):
+    st.markdown("""
+    **QR Forge** is a free, no-sign-up QR code generator that supports three modes:
+
+    - **Dynamic QR codes** — your URL is tracked through a short-link with scan analytics
+      and an optional expiry timer. Great for marketing campaigns, event tickets, and
+      time-limited promotions.
+    - **Artistic QR codes** — upload any image and its colors are mapped pixel-by-pixel
+      onto the QR modules. The result looks like your photo but scans perfectly.
+    - **Permanent QR codes** — the destination URL is encoded directly into the QR pattern.
+      No server involved, works forever, even offline.
+
+    **Features:** custom foreground/background colors · logo overlay · background image blending ·
+    error-correction control (L / M / Q / H) · PNG & SVG download · auto-push analytics to GitHub.
+
+    Built with ❤️ by **Tuhin Kumar Singha Roy** using Python, Streamlit, segno, and Pillow.
+    """)
 
 
 # ============================================================================
 # FOOTER
 # ============================================================================
-st.divider()
-st.markdown(
-    """
-    <div style='text-align: center; margin-top: 20px;'>
-        <p style='color: #4a5568; font-size: 16px;'>Built with ❤️ by <b>Tuhin Kumar Singha Roy</b></p>
-        <p>
-            <a href="https://www.linkedin.com/in/tuhininaiml" target="_blank"
-               style="text-decoration:none; margin-right:15px; color:#0077B5; font-weight:bold;">
-               🔗 LinkedIn</a>
-            <a href="https://github.com/Tuhin108" target="_blank"
-               style="text-decoration:none; color:#333; font-weight:bold;">
-               💻 GitHub</a>
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+
+st.markdown("""
+<div style='text-align:center;margin-top:20px;'>
+    <p style='color:#4a5568;font-size:16px;'>Built with ❤️ by <b>Tuhin Kumar Singha Roy</b></p>
+    <p>
+        <a href="https://www.linkedin.com/in/tuhininaiml" target="_blank"
+           style="text-decoration:none;margin-right:15px;color:#0077B5;font-weight:bold;">
+           🔗 LinkedIn</a>
+        <a href="https://github.com/Tuhin108" target="_blank"
+           style="text-decoration:none;color:#333;font-weight:bold;">
+           💻 GitHub</a>
+    </p>
+    <p style='color:#a0aec0;font-size:12px;'>
+        QR Forge · Free QR Code Generator · Custom · Artistic · Permanent QR codes
+    </p>
+</div>
+""", unsafe_allow_html=True)
