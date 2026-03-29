@@ -174,7 +174,7 @@ def handle_redirect():
         st.title("🚀 Redirecting…")
         st.info(f"Taking you to: **{target_url}**")
         st.write("If your target doesn't open automatically, click below:")
-        st.link_button("Open Link", target_url, type="primary", use_container_width=True)
+        st.link_button("Open Link", target_url, type="primary", width="stretch")
         components.html(
             f"""<script>window.top.location.href = "{target_url}";</script>""",
             height=0, width=0
@@ -551,7 +551,7 @@ with tab_gen:
         scale = st.slider("Scale (size)", 5, 20, 10)
         bg_file   = st.file_uploader("Background image (optional)", type=["png","jpg","jpeg"])
         logo_file = st.file_uploader("Logo (optional)",             type=["png","jpg","jpeg"])
-        generate_btn = st.button("🎨 Generate Dynamic QR", type="primary", use_container_width=True)
+        generate_btn = st.button("🎨 Generate Dynamic QR", type="primary", width="stretch")
 
     with col2:
         st.subheader("Preview")
@@ -576,7 +576,7 @@ with tab_gen:
                             redirect_url, fg_color, bg_color,
                             error_level, logo_img, bg_img, scale
                         )
-                        st.image(png_bytes, use_container_width=True)
+                        st.image(png_bytes, width="stretch")
                         expires_at = datetime.fromisoformat(redirect_data["expires_at"])
                         st.success("✅ QR Code Generated!")
                         st.markdown(
@@ -590,11 +590,11 @@ with tab_gen:
                         with c1:
                             st.download_button("📥 PNG", data=png_bytes,
                                                file_name=f"qr_{token}.png",
-                                               mime="image/png", use_container_width=True)
+                                               mime="image/png", width="stretch")
                         with c2:
                             st.download_button("📥 SVG", data=svg_bytes,
                                                file_name=f"qr_{token}.svg",
-                                               mime="image/svg+xml", use_container_width=True)
+                                               mime="image/svg+xml", width="stretch")
                     except Exception as e:
                         st.error(f"❌ {e}")
 
@@ -617,7 +617,7 @@ with tab_art:
         art_saturation = st.slider("Color Saturation", 0.5, 2.5, 1.3, 0.1)
         art_module_px  = st.slider("Module Size (px)", 8, 24, 16, 2)
         art_expiry     = st.slider("Expiry (minutes)", 1, MAX_EXPIRY_DAYS * 24 * 60, 60, key="art_exp")
-        art_btn        = st.button("🎨 Generate Artistic QR", type="primary", use_container_width=True)
+        art_btn        = st.button("🎨 Generate Artistic QR", type="primary", width="stretch")
 
     with art_col2:
         st.subheader("Result")
@@ -661,7 +661,7 @@ with tab_art:
                         st.info("💡 Tip: test scanning before sharing. If it won't scan, use **White** background.")
                         st.download_button("📥 Download Artistic QR (PNG)", data=png_bytes,
                                            file_name=f"art_qr_{token}.png",
-                                           mime="image/png", use_container_width=True)
+                                           mime="image/png", width="stretch")
                     except Exception as e:
                         st.error(f"❌ {e}")
         else:
@@ -732,7 +732,7 @@ with tab_perm:
             | Smaller QR pattern | ✅ | Depends on URL length |
             """)
 
-        perm_btn = st.button("🔒 Generate Permanent QR", type="primary", use_container_width=True)
+        perm_btn = st.button("🔒 Generate Permanent QR", type="primary", width="stretch")
 
     with perm_col2:
         st.subheader("Preview")
@@ -756,7 +756,7 @@ with tab_perm:
                             scale=perm_scale,
                         )
 
-                        st.image(png_bytes, use_container_width=True)
+                        st.image(png_bytes, width="stretch")
                         st.success("✅ Permanent QR Generated — never expires!")
 
                         st.markdown(
@@ -781,7 +781,7 @@ with tab_perm:
                                 data=png_bytes,
                                 file_name="permanent_qr.png",
                                 mime="image/png",
-                                use_container_width=True
+                                width="stretch"
                             )
                         with c2:
                             st.download_button(
@@ -789,7 +789,7 @@ with tab_perm:
                                 data=svg_bytes,
                                 file_name="permanent_qr.svg",
                                 mime="image/svg+xml",
-                                use_container_width=True
+                                width="stretch"
                             )
 
                     except Exception as e:
